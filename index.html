@@ -7,7 +7,19 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: system-ui, 'Segoe UI', 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif; }
         body { background: #F4F8FF; padding: 24px 32px; min-height: 100vh; display: flex; justify-content: center; font-size: 18px; }
-        .app { max-width: 1440px; width: 100%; }
+        /* 加载画面 */
+        #loadingScreen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #F4F8FF; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; z-index: 9999;
+            font-size: 1.5rem; color: #1677FF; transition: opacity 0.3s;
+        }
+        #loadingScreen .spinner {
+            width: 48px; height: 48px; border: 4px solid rgba(22,119,255,0.2);
+            border-top-color: #1677FF; border-radius: 50%;
+            animation: spin 0.8s linear infinite; margin-bottom: 16px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
         .device-card, .table-wrapper { animation: fadeInUp 0.5s ease-out; }
         .app-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; flex-wrap: wrap; gap: 16px; }
@@ -77,6 +89,12 @@
     </style>
 </head>
 <body>
+<!-- 加载画面 -->
+<div id="loadingScreen">
+    <div class="spinner"></div>
+    <span>⏳ 温湿箱 · 智约 准备中…</span>
+</div>
+
 <div class="app">
     <div class="app-header">
         <h1>🌡️ 温湿箱 · 智约</h1>
@@ -142,477 +160,514 @@
     </div>
 </div>
 
-<script>
-    (function(){
-        "use strict";
-        const STORAGE_KEY = 'climate_chamber_offline_pack';
-        const COLOR_PALETTE = [
-            'hsl(200,25%,85%)','hsl(160,25%,85%)','hsl(220,25%,85%)',
-            'hsl(280,25%,85%)','hsl(0,0%,90%)','hsl(30,25%,85%)',
-            'hsl(120,25%,85%)','hsl(320,25%,85%)'
-        ];
-        function getBookingColor(bookingId){
-            let hash=0;
-            for(let i=0;i<bookingId.length;i++) hash=((hash<<5)-hash)+bookingId.charCodeAt(i);
-            return COLOR_PALETTE[Math.abs(hash)%COLOR_PALETTE.length];
+<script type="module">
+    // ----- 引入 Tauri API（打包后支持，浏览器环境可降级）-----
+    let fsModule = null;
+    try {
+        fsModule = await import('https://esm.sh/@tauri-apps/api/fs@1.5.0?target=es2022');
+    } catch (e) {
+        // 浏览器或加载失败时，后续降级为 localStorage
+    }
+    const { readTextFile, writeTextFile, BaseDirectory } = fsModule || {};
+
+    const DATA_FILE = 'chamber_data.json';
+    const STORAGE_KEY = 'climate_chamber_offline_pack';
+    const isTauri = typeof window.__TAURI__ !== 'undefined' && fsModule;
+
+    // ---------- 核心存储逻辑 ----------
+    async function loadFromFile() {
+        if (!isTauri) return null;
+        try {
+            const content = await readTextFile(DATA_FILE, { dir: BaseDirectory.AppLocalData });
+            return JSON.parse(content);
+        } catch { return null; }
+    }
+
+    async function saveToFile(data) {
+        if (!isTauri) return false;
+        try {
+            await writeTextFile(DATA_FILE, JSON.stringify(data, null, 2), { dir: BaseDirectory.AppLocalData });
+            return true;
+        } catch { return false; }
+    }
+
+    async function loadData() {
+        // 优先 Tauri 文件
+        const fileData = await loadFromFile();
+        if (fileData) return fileData;
+        // 回退 localStorage
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+            try { return JSON.parse(saved); } catch {}
         }
+        return null;
+    }
 
-        function getDefaultData(){
-            const crossStart = new Date(2026, 5, 5, 10, 0);
-            const crossEnd = new Date(2026, 5, 10, 18, 0);
-            return {
-                devices: [
-                    { id:'E001', name:'恒温恒湿箱 A1', model:'TH-80S', location:'环境实验室 201', status:'idle' },
-                    { id:'E002', name:'快速温变箱 B3', model:'KTH-200', location:'可靠性大厅', status:'inuse' },
-                    { id:'E003', name:'高低温湿热箱 C2', model:'GDS-100', location:'B栋 105', status:'maintenance' },
-                    { id:'E004', name:'步入式温湿箱 D5', model:'WKS-500', location:'大型测试区', status:'idle' },
-                    { id:'E005', name:'精密恒温箱 F8', model:'HPP-260', location:'精密仪器室', status:'reserved' }
-                ],
-                bookings: [
-                    { id:'B001', deviceId:'E001', tester:'张明', customerName:'华大基因', projectName:'稳定性测试', testCondition:'85°C/85%RH', startTime:new Date(2026,4,1,10,0).toISOString(), endTime:new Date(2026,4,1,18,0).toISOString(), note:'连续记录' },
-                    { id:'B002', deviceId:'E002', tester:'李蔚', customerName:'新能源研究院', projectName:'电池温循', testCondition:'-40~85°C 循环', startTime:new Date(2026,4,2,9,0).toISOString(), endTime:new Date(2026,4,2,14,0).toISOString(), note:'防爆要求' },
-                    { id:'B003', deviceId:'E005', tester:'王磊', customerName:'中车电机', projectName:'绝缘老化', testCondition:'120°C/1000h', startTime:new Date(2026,4,8,8,0).toISOString(), endTime:new Date(2026,4,13,8,0).toISOString(), note:'长期监控' },
-                    { id:'B004', deviceId:'E001', tester:'赵敏', customerName:'航天科技', projectName:'热循环', testCondition:'-55°C~125°C', startTime:new Date(2026,4,3,14,0).toISOString(), endTime:new Date(2026,4,5,10,0).toISOString(), note:'3循环' },
-                    { id:'B005', deviceId:'E004', tester:'陈晨', customerName:'电子科大', projectName:'湿热测试', testCondition:'60°C/90%RH', startTime:new Date(2026,4,2,12,0).toISOString(), endTime:new Date(2026,4,3,12,0).toISOString(), note:'高湿' },
-                    { id:'B006', deviceId:'E001', tester:'跨月测试', customerName:'测试公司', projectName:'跨月验证', testCondition:'25°C/60%RH', startTime:crossStart.toISOString(), endTime:crossEnd.toISOString(), note:'跨月测试' }
-                ],
-                nextDeviceId:1007,
-                nextBookingId:5007
-            };
+    async function saveData(data, showMsg = true) {
+        if (isTauri) {
+            await saveToFile(data);
         }
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        if (showMsg) showToast('✅ 数据已保存');
+    }
 
-        let devices=[], bookings=[], nextDeviceId=1001, nextBookingId=5001;
-        const statusMap={idle:'空闲',reserved:'预约中',inuse:'使用中',maintenance:'维护中'};
-        const statusClassMap={idle:'status-idle',reserved:'status-reserved',inuse:'status-inuse',maintenance:'status-maintenance'};
-        const statusIconMap={idle:'✅',reserved:'⏳',inuse:'▶️',maintenance:'🔧'};
-        let deviceCalendarState = new Map();
+    // ---------- 原有业务逻辑 ----------
+    const COLOR_PALETTE = ['hsl(200,25%,85%)','hsl(160,25%,85%)','hsl(220,25%,85%)','hsl(280,25%,85%)','hsl(0,0%,90%)','hsl(30,25%,85%)','hsl(120,25%,85%)','hsl(320,25%,85%)'];
+    function getBookingColor(id){
+        let hash=0;
+        for(let i=0;i<id.length;i++) hash=((hash<<5)-hash)+id.charCodeAt(i);
+        return COLOR_PALETTE[Math.abs(hash)%COLOR_PALETTE.length];
+    }
 
-        function showToast(msg){
-            const toast = document.getElementById('toastMsg');
-            if(toast){
-                toast.textContent = msg;
-                toast.style.opacity = '1';
-                setTimeout(()=>{ toast.style.opacity = '0'; }, 1500);
-            }
+    function getDefaultData(){
+        const crossStart = new Date(2026, 5, 5, 10, 0);
+        const crossEnd = new Date(2026, 5, 10, 18, 0);
+        return {
+            devices: [
+                { id:'E001', name:'恒温恒湿箱 A1', model:'TH-80S', location:'环境实验室 201', status:'idle' },
+                { id:'E002', name:'快速温变箱 B3', model:'KTH-200', location:'可靠性大厅', status:'inuse' },
+                { id:'E003', name:'高低温湿热箱 C2', model:'GDS-100', location:'B栋 105', status:'maintenance' },
+                { id:'E004', name:'步入式温湿箱 D5', model:'WKS-500', location:'大型测试区', status:'idle' },
+                { id:'E005', name:'精密恒温箱 F8', model:'HPP-260', location:'精密仪器室', status:'reserved' }
+            ],
+            bookings: [
+                { id:'B001', deviceId:'E001', tester:'张明', customerName:'华大基因', projectName:'稳定性测试', testCondition:'85°C/85%RH', startTime:new Date(2026,4,1,10,0).toISOString(), endTime:new Date(2026,4,1,18,0).toISOString(), note:'连续记录' },
+                { id:'B002', deviceId:'E002', tester:'李蔚', customerName:'新能源研究院', projectName:'电池温循', testCondition:'-40~85°C 循环', startTime:new Date(2026,4,2,9,0).toISOString(), endTime:new Date(2026,4,2,14,0).toISOString(), note:'防爆要求' },
+                { id:'B003', deviceId:'E005', tester:'王磊', customerName:'中车电机', projectName:'绝缘老化', testCondition:'120°C/1000h', startTime:new Date(2026,4,8,8,0).toISOString(), endTime:new Date(2026,4,13,8,0).toISOString(), note:'长期监控' },
+                { id:'B004', deviceId:'E001', tester:'赵敏', customerName:'航天科技', projectName:'热循环', testCondition:'-55°C~125°C', startTime:new Date(2026,4,3,14,0).toISOString(), endTime:new Date(2026,4,5,10,0).toISOString(), note:'3循环' },
+                { id:'B005', deviceId:'E004', tester:'陈晨', customerName:'电子科大', projectName:'湿热测试', testCondition:'60°C/90%RH', startTime:new Date(2026,4,2,12,0).toISOString(), endTime:new Date(2026,4,3,12,0).toISOString(), note:'高湿' },
+                { id:'B006', deviceId:'E001', tester:'跨月测试', customerName:'测试公司', projectName:'跨月验证', testCondition:'25°C/60%RH', startTime:crossStart.toISOString(), endTime:crossEnd.toISOString(), note:'跨月测试' }
+            ],
+            nextDeviceId:1007,
+            nextBookingId:5007
+        };
+    }
+
+    let devices=[], bookings=[], nextDeviceId=1001, nextBookingId=5001;
+    const statusMap={idle:'空闲',reserved:'预约中',inuse:'使用中',maintenance:'维护中'};
+    const statusClassMap={idle:'status-idle',reserved:'status-reserved',inuse:'status-inuse',maintenance:'status-maintenance'};
+    const statusIconMap={idle:'✅',reserved:'⏳',inuse:'▶️',maintenance:'🔧'};
+    let deviceCalendarState = new Map();
+
+    function showToast(msg){
+        const toast = document.getElementById('toastMsg');
+        if(toast){
+            toast.textContent = msg;
+            toast.style.opacity = '1';
+            setTimeout(()=>{ toast.style.opacity = '0'; }, 1500);
         }
+    }
 
-        function saveToLocalStorage(showMsg = true){
-            try{
-                const dataToSave = { devices, bookings, nextDeviceId, nextBookingId };
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
-                if(showMsg) showToast('✅ 数据已保存');
-                return true;
-            }catch(e){
-                if(showMsg) showToast('⚠️ 保存失败');
-                return false;
-            }
-        }
+    // 导出数据（浏览器下载）
+    function exportDataToFile(data) {
+        const dataStr = JSON.stringify(data, null, 2);
+        const blob = new Blob([dataStr], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `chamber_export_${new Date().toISOString().slice(0,16).replace(/:/g,'-')}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
 
-        function loadFromLocalStorage(){
-            const saved = localStorage.getItem(STORAGE_KEY);
-            if(saved){
-                try{
-                    const data = JSON.parse(saved);
-                    if(data.devices !== undefined && data.bookings !== undefined){
-                        devices = data.devices;
-                        bookings = data.bookings;
-                        nextDeviceId = data.nextDeviceId || 1001;
-                        nextBookingId = data.nextBookingId || 5001;
-                        return true;
+    // 其余业务函数（syncStatus, render...）保持不变，仅将存储调用替换为 saveData
+    function syncDeviceStatusFromBookings(){
+        const now=new Date();
+        devices.forEach(dev=>{
+            if(dev.status==='maintenance') return;
+            const active=bookings.find(b=>b.deviceId===dev.id&&new Date(b.startTime)<=now&&new Date(b.endTime)>=now);
+            if(active) dev.status='inuse';
+            else{const future=bookings.find(b=>b.deviceId===dev.id&&new Date(b.startTime)>now); dev.status=future?'reserved':'idle';}
+        });
+    }
+
+    function getCurrentBooking(deviceId){
+        const now=new Date();
+        return bookings.find(b=>b.deviceId===deviceId&&new Date(b.startTime)<=now&&new Date(b.endTime)>=now);
+    }
+
+    function getAllFutureBookings(deviceId){
+        const now=new Date();
+        return bookings.filter(b=>b.deviceId===deviceId&&new Date(b.startTime)>now).sort((a,b)=>new Date(a.startTime)-new Date(b.startTime));
+    }
+
+    function checkOverlap(deviceId,start,end,excludeId=null){
+        const s=new Date(start).getTime(), e=new Date(end).getTime();
+        if(s>=e) return true;
+        return bookings.some(b=>b.deviceId===deviceId&&(!excludeId||b.id!==excludeId)&&new Date(b.startTime).getTime()<e&&new Date(b.endTime).getTime()>s);
+    }
+
+    function formatDateTime(iso){
+        try{ return new Date(iso).toLocaleString('zh-CN',{hour12:false}); }catch{ return iso; }
+    }
+
+    function toDatetimeLocal(iso){
+        if(!iso) return '';
+        const d=new Date(iso);
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}T${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    }
+
+    function generateMiniCalendar(deviceId, year, month){
+        const firstDay=new Date(year, month, 1);
+        const startWeekday=firstDay.getDay();
+        const daysInMonth=new Date(year, month+1, 0).getDate();
+        const prevMonthDays=new Date(year, month, 0).getDate();
+        const now=new Date();
+        const deviceBookings=bookings.filter(b=>b.deviceId===deviceId).sort((a,b)=>new Date(a.startTime)-new Date(b.startTime));
+        const dateToBooking=new Map();
+        for(let d=1;d<=daysInMonth;d++){
+            const date=new Date(year, month, d); date.setHours(0,0,0,0);
+            let covering=null;
+            for(let b of deviceBookings){
+                const start=new Date(b.startTime); start.setHours(0,0,0,0);
+                const end=new Date(b.endTime); end.setHours(0,0,0,0);
+                if(date>=start&&date<=end){
+                    if(!covering) covering=b;
+                    else{
+                        const curActive=(new Date(covering.startTime)<=now&&new Date(covering.endTime)>=now);
+                        const newActive=(new Date(b.startTime)<=now&&new Date(b.endTime)>=now);
+                        if(newActive&&!curActive) covering=b;
+                        else if(newActive===curActive&&new Date(b.startTime)<new Date(covering.startTime)) covering=b;
                     }
-                }catch(e){}
+                }
             }
+            if(covering) dateToBooking.set(d, covering);
+        }
+        let cells=[];
+        for(let i=startWeekday-1;i>=0;i--) cells.push({day:prevMonthDays-i,curr:false});
+        for(let d=1;d<=daysInMonth;d++) cells.push({day:d,curr:true});
+        let n=1; while(cells.length<42) cells.push({day:n++,curr:false});
+        cells.forEach(cell=>{const booking=dateToBooking.get(cell.day); if(booking&&cell.curr) cell.color=getBookingColor(booking.id); else cell.color=null;});
+        cells.forEach((cell,idx)=>{
+            if(!cell.color) return;
+            const left=idx>0?cells[idx-1]:null, right=idx<cells.length-1?cells[idx+1]:null;
+            const leftSame=left&&left.color===cell.color, rightSame=right&&right.color===cell.color;
+            if(leftSame&&rightSame) cell.cont='continuous-both';
+            else if(leftSame) cell.cont='continuous-right';
+            else if(rightSame) cell.cont='continuous-left';
+            else cell.cont='';
+        });
+        let daysHtml='';
+        cells.forEach(cell=>{
+            let style=cell.color?` style="background-color:${cell.color}; color:#1D2129;"`:'';
+            let cls=`mini-day ${!cell.curr?'other-month':''} ${cell.cont||''}`;
+            daysHtml+=`<div class="${cls}"${style}>${cell.day}</div>`;
+        });
+        const wd=['日','一','二','三','四','五','六'].map(d=>`<div>${d}</div>`).join('');
+        return `<div class="mini-calendar">
+            <div class="mini-calendar-header">
+                <span class="current-month">${year}年${month+1}月</span>
+                <div class="month-nav">
+                    <button class="prev-month" data-device="${deviceId}" data-year="${year}" data-month="${month}">◀</button>
+                    <button class="next-month" data-device="${deviceId}" data-year="${year}" data-month="${month}">▶</button>
+                </div>
+            </div>
+            <div class="mini-weekdays">${wd}</div>
+            <div class="mini-days">${daysHtml}</div>
+        </div>`;
+    }
+
+    function renderDevices(){
+        syncDeviceStatusFromBookings();
+        const grid=document.getElementById('deviceGrid');
+        if(!devices.length){grid.innerHTML='<div style="grid-column:1/-1;padding:40px;text-align:center;">暂无设备</div>';return;}
+        let html='';
+        devices.forEach(dev=>{
+            let state=deviceCalendarState.get(dev.id);
+            if(!state){ const now=new Date(); state={year:now.getFullYear(), month:now.getMonth()}; deviceCalendarState.set(dev.id,state); }
+            const current=getCurrentBooking(dev.id);
+            const future=getAllFutureBookings(dev.id);
+            let bookingsHtml='';
+            if(current){
+                const bg=getBookingColor(current.id);
+                bookingsHtml+=`<div class="booking-info-block current" style="background:${bg};">
+                    <div class="title">▶️ 🔵 运行中 · 测试人: ${escapeHtml(current.tester)}</div>
+                    <div class="detail">🌡️ 测试条件：${escapeHtml(current.testCondition||'未填写')}</div>
+                    <div class="detail">📅 时间：${formatDateTime(current.startTime)} → ${formatDateTime(current.endTime)}</div>
+                    <div class="detail">💬 备注：${escapeHtml(current.note||'无')}</div>
+                </div>`;
+            }
+            future.forEach((b,idx)=>{
+                const bg=getBookingColor(b.id);
+                bookingsHtml+=`<div class="booking-info-block" style="background:${bg};">
+                    <div class="title">⏳ 预约 #${idx+1} · 测试人: ${escapeHtml(b.tester)}</div>
+                    <div class="detail">🧪 测试条件：${escapeHtml(b.testCondition||'未填写')}</div>
+                    <div class="detail">📆 时间：${formatDateTime(b.startTime)} → ${formatDateTime(b.endTime)}</div>
+                    <div class="detail">✏️ 备注：${escapeHtml(b.note||'无')}</div>
+                </div>`;
+            });
+            if(future.length===0 && !current) bookingsHtml='<div style="text-align:center;padding:12px;">暂无预约</div>';
+            html+=`<div class="device-card" data-device-id="${dev.id}">
+                <div class="card-header">
+                    <span class="device-name">${escapeHtml(dev.name)}</span>
+                    <span class="status-badge ${statusClassMap[dev.status]}">${statusIconMap[dev.status]} ${statusMap[dev.status]}</span>
+                </div>
+                <div class="device-meta">
+                    <div>🏷️ ${escapeHtml(dev.id)}</div>
+                    <div>📦 ${escapeHtml(dev.model)}</div>
+                    <div>📍 ${escapeHtml(dev.location)}</div>
+                </div>
+                <div class="calendar-container" data-device="${dev.id}">${generateMiniCalendar(dev.id, state.year, state.month)}</div>
+                ${bookingsHtml}
+                <div class="card-actions">
+                    <button class="btn-icon" data-action="viewDevice" data-id="${dev.id}">👁️ 查看</button>
+                    <button class="btn-icon" data-action="editDevice" data-id="${dev.id}">✏️ 编辑</button>
+                    <button class="btn-icon" data-action="deleteDevice" data-id="${dev.id}">🗑️ 删除</button>
+                </div>
+            </div>`;
+        });
+        grid.innerHTML=html;
+        grid.addEventListener('click',(e)=>{
+            const prevBtn=e.target.closest('.prev-month');
+            const nextBtn=e.target.closest('.next-month');
+            if(prevBtn){
+                e.preventDefault();
+                const deviceId=prevBtn.dataset.device;
+                let year=parseInt(prevBtn.dataset.year), month=parseInt(prevBtn.dataset.month);
+                let newMonth=month-1, newYear=year;
+                if(newMonth<0){ newMonth=11; newYear--; }
+                deviceCalendarState.set(deviceId,{year:newYear,month:newMonth});
+                updateDeviceCalendar(deviceId);
+            }else if(nextBtn){
+                e.preventDefault();
+                const deviceId=nextBtn.dataset.device;
+                let year=parseInt(nextBtn.dataset.year), month=parseInt(nextBtn.dataset.month);
+                let newMonth=month+1, newYear=year;
+                if(newMonth>11){ newMonth=0; newYear++; }
+                deviceCalendarState.set(deviceId,{year:newYear,month:newMonth});
+                updateDeviceCalendar(deviceId);
+            }
+        });
+    }
+
+    function updateDeviceCalendar(deviceId){
+        const state=deviceCalendarState.get(deviceId);
+        if(!state) return;
+        const container=document.querySelector(`.calendar-container[data-device="${deviceId}"]`);
+        if(container) container.innerHTML=generateMiniCalendar(deviceId, state.year, state.month);
+    }
+
+    function renderBookings(){
+        const tbody=document.getElementById('bookingTbody');
+        if(!bookings.length){tbody.innerHTML='<tr><td colspan="8" style="text-align:center">暂无预约</td></tr>';return;}
+        let rows='';
+        bookings.forEach((b)=>{
+            const dev=devices.find(d=>d.id===b.deviceId);
+            rows+=`<tr>
+                <td>${escapeHtml(dev?.name||b.deviceId)}</td>
+                <td>${escapeHtml(b.tester)}</td>
+                <td>${escapeHtml(b.customerName)}</td>
+                <td>${escapeHtml(b.projectName)}</td>
+                <td>${escapeHtml(b.testCondition||'—')}</td>
+                <td>${formatDateTime(b.startTime)}</td>
+                <td>${formatDateTime(b.endTime)}</td>
+                <td><div class="booking-actions">
+                    <button class="btn-icon" data-action="viewBooking" data-id="${b.id}">👁️</button>
+                    <button class="btn-icon" data-action="editBooking" data-id="${b.id}">✏️</button>
+                    <button class="btn-icon" data-action="deleteBooking" data-id="${b.id}">🗑️</button>
+                </div></td>
+            </tr>`;
+        });
+        tbody.innerHTML=rows;
+    }
+
+    function refreshUI(){ renderDevices(); renderBookings(); }
+    function escapeHtml(s){ return String(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]); }
+
+    // 模态框逻辑
+    let currentMode=null, currentEditId=null;
+    const modalOverlay=document.getElementById('modalOverlay'), modalTitle=document.getElementById('modalTitle'), modalSaveBtn=document.getElementById('modalSaveBtn');
+    const deviceFormFields=document.getElementById('deviceFormFields'), bookingFormFields=document.getElementById('bookingFormFields');
+    const deviceName=document.getElementById('deviceName'), deviceModel=document.getElementById('deviceModel'), deviceLocation=document.getElementById('deviceLocation'), deviceStatus=document.getElementById('deviceStatus');
+    const bookingDeviceSelect=document.getElementById('bookingDeviceSelect'), testerName=document.getElementById('testerName'), customerName=document.getElementById('customerName'), projectName=document.getElementById('projectName'), testCondition=document.getElementById('testCondition'), startTime=document.getElementById('startTime'), endTime=document.getElementById('endTime'), bookingNote=document.getElementById('bookingNote');
+    const deviceFormError=document.getElementById('deviceFormError'), bookingFormError=document.getElementById('bookingFormError');
+
+    function openModal(mode,id=null){
+        currentMode=mode; currentEditId=id;
+        deviceFormError.textContent=''; bookingFormError.textContent='';
+        deviceFormFields.style.display='none'; bookingFormFields.style.display='none';
+        const isView=mode.includes('view');
+        if(mode.includes('Device')){
+            deviceFormFields.style.display='block';
+            modalTitle.textContent=mode==='addDevice'?'➕ 添加设备':(mode==='viewDevice'?'🔍 设备详情':'✏️ 编辑设备');
+        }else{
+            bookingFormFields.style.display='block';
+            modalTitle.textContent=mode==='addBooking'?'📅 新建预约':(mode==='viewBooking'?'📋 预约详情':'✏️ 编辑预约');
+            populateDeviceSelect();
+        }
+        document.querySelectorAll('#modalForm input, #modalForm select, #modalForm textarea').forEach(el=>el.disabled=isView);
+        modalSaveBtn.style.display=isView?'none':'inline-flex';
+        if((mode==='editDevice'||mode==='viewDevice')&&id){
+            const d=devices.find(x=>x.id===id);
+            if(d){deviceName.value=d.name; deviceModel.value=d.model; deviceLocation.value=d.location; deviceStatus.value=d.status;}
+        }else if(mode==='addDevice'){deviceName.value=''; deviceModel.value=''; deviceLocation.value=''; deviceStatus.value='idle';}
+        if((mode==='editBooking'||mode==='viewBooking')&&id){
+            const b=bookings.find(x=>x.id===id);
+            if(b){
+                testerName.value=b.tester; customerName.value=b.customerName; projectName.value=b.projectName;
+                testCondition.value=b.testCondition||''; bookingNote.value=b.note||'';
+                startTime.value=toDatetimeLocal(b.startTime); endTime.value=toDatetimeLocal(b.endTime);
+                populateDeviceSelect(); bookingDeviceSelect.value=b.deviceId;
+            }
+        }else if(mode==='addBooking'){
+            testerName.value=''; customerName.value=''; projectName.value=''; testCondition.value=''; bookingNote.value='';
+            startTime.value=''; endTime.value=''; populateDeviceSelect();
+        }
+        modalOverlay.classList.add('active');
+    }
+
+    function populateDeviceSelect(){
+        bookingDeviceSelect.innerHTML='';
+        devices.forEach(d=>{const o=document.createElement('option'); o.value=d.id; o.textContent=`${d.name} (${d.model})`; bookingDeviceSelect.appendChild(o);});
+    }
+
+    function closeModal(){ modalOverlay.classList.remove('active'); }
+
+    function validateDevice(){
+        if(!deviceName.value.trim()){ deviceFormError.textContent='请填写设备名称'; return false; }
+        if(!deviceModel.value.trim()){ deviceFormError.textContent='请填写型号'; return false; }
+        if(!deviceLocation.value.trim()){ deviceFormError.textContent='请填写位置'; return false; }
+        return true;
+    }
+
+    function validateBooking(){
+        if(!bookingDeviceSelect.value){ bookingFormError.textContent='请选择设备'; return false; }
+        if(!testerName.value.trim()){ bookingFormError.textContent='测试人不能为空'; return false; }
+        if(!customerName.value.trim()){ bookingFormError.textContent='客户名称不能为空'; return false; }
+        if(!projectName.value.trim()){ bookingFormError.textContent='项目名称不能为空'; return false; }
+        if(!startTime.value||!endTime.value){ bookingFormError.textContent='请填写起止时间'; return false; }
+        if(new Date(startTime.value)>=new Date(endTime.value)){ bookingFormError.textContent='结束时间必须晚于开始时间'; return false; }
+        const deviceId=bookingDeviceSelect.value;
+        const startISO=new Date(startTime.value).toISOString(), endISO=new Date(endTime.value).toISOString();
+        if(checkOverlap(deviceId,startISO,endISO,currentMode==='editBooking'?currentEditId:null)){
+            bookingFormError.textContent='该设备在此时间段已被预约，请调整时间！';
             return false;
         }
+        return true;
+    }
 
-        function initData(){
-            if(!loadFromLocalStorage()){
-                const def = getDefaultData();
-                devices = def.devices;
-                bookings = def.bookings;
-                nextDeviceId = def.nextDeviceId;
-                nextBookingId = def.nextBookingId;
-                saveToLocalStorage(false);
-            }
-            const now = new Date();
-            devices.forEach(dev => {
-                if(!deviceCalendarState.has(dev.id)){
-                    deviceCalendarState.set(dev.id, { year: now.getFullYear(), month: now.getMonth() });
-                }
-            });
+    async function handleSave(){
+        if(!currentMode) return;
+        if(currentMode.includes('Device')){
+            if(!validateDevice()) return;
+            const data={name:deviceName.value.trim(), model:deviceModel.value.trim(), location:deviceLocation.value.trim(), status:deviceStatus.value};
+            if(currentMode==='addDevice') devices.push({id:`E${nextDeviceId++}`,...data});
+            else{const idx=devices.findIndex(d=>d.id===currentEditId); if(idx!==-1) devices[idx]={...devices[idx],...data};}
+        }else{
+            if(!validateBooking()) return;
+            const startISO=new Date(startTime.value).toISOString(), endISO=new Date(endTime.value).toISOString();
+            const data={deviceId:bookingDeviceSelect.value, tester:testerName.value.trim(), customerName:customerName.value.trim(), projectName:projectName.value.trim(), testCondition:testCondition.value.trim(), startTime:startISO, endTime:endISO, note:bookingNote.value.trim()};
+            if(currentMode==='addBooking') bookings.push({id:`B${nextBookingId++}`,...data});
+            else{const idx=bookings.findIndex(b=>b.id===currentEditId); if(idx!==-1) bookings[idx]={...bookings[idx],...data};}
         }
+        const allData = { devices, bookings, nextDeviceId, nextBookingId };
+        await saveData(allData);
+        refreshUI();
+        closeModal();
+    }
 
-        function exportData(){
-            const dataToExport = { devices, bookings, nextDeviceId, nextBookingId };
-            const dataStr = JSON.stringify(dataToExport, null, 2);
-            const blob = new Blob([dataStr], {type: 'application/json'});
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `chamber_data_${new Date().toISOString().slice(0,19).replace(/:/g,'-')}.json`;
-            a.click();
-            URL.revokeObjectURL(url);
-            showToast('📁 数据已导出');
+    async function deleteDevice(id){
+        if(confirm('删除设备？关联预约将保留')){
+            devices=devices.filter(d=>d.id!==id);
+            await saveData({ devices, bookings, nextDeviceId, nextBookingId });
+            refreshUI();
         }
+    }
 
-        function importData(file){
+    async function deleteBooking(id){
+        if(confirm('删除预约？')){
+            bookings=bookings.filter(b=>b.id!==id);
+            await saveData({ devices, bookings, nextDeviceId, nextBookingId });
+            refreshUI();
+        }
+    }
+
+    // 导出
+    document.getElementById('exportDataBtn').addEventListener('click', ()=>{
+        exportDataToFile({ devices, bookings, nextDeviceId, nextBookingId });
+        showToast('📁 导出完成（请查看浏览器下载/另存为弹窗）');
+    });
+    // 导入
+    document.getElementById('importFileInput').addEventListener('change', (e) => {
+        if(e.target.files.length) {
             const reader = new FileReader();
-            reader.onload = function(e){
-                try{
-                    const imported = JSON.parse(e.target.result);
+            reader.onload = async function(ev){
+                try {
+                    const imported = JSON.parse(ev.target.result);
                     if(imported.devices && imported.bookings){
                         devices = imported.devices;
                         bookings = imported.bookings;
                         nextDeviceId = imported.nextDeviceId || 1001;
                         nextBookingId = imported.nextBookingId || 5001;
-                        saveToLocalStorage(true);
+                        await saveData({ devices, bookings, nextDeviceId, nextBookingId });
                         refreshUI();
                         showToast('📂 导入成功');
-                    } else { showToast('❌ 文件格式不正确'); }
-                }catch(err){ showToast('❌ 解析文件失败'); }
+                    } else showToast('❌ 格式错误');
+                } catch { showToast('❌ 解析失败'); }
             };
-            reader.readAsText(file);
-        }
-
-        function syncDeviceStatusFromBookings(){
-            const now=new Date();
-            devices.forEach(dev=>{
-                if(dev.status==='maintenance') return;
-                const active=bookings.find(b=>b.deviceId===dev.id&&new Date(b.startTime)<=now&&new Date(b.endTime)>=now);
-                if(active) dev.status='inuse';
-                else{const future=bookings.find(b=>b.deviceId===dev.id&&new Date(b.startTime)>now); dev.status=future?'reserved':'idle';}
-            });
-        }
-
-        function getCurrentBooking(deviceId){
-            const now=new Date();
-            return bookings.find(b=>b.deviceId===deviceId&&new Date(b.startTime)<=now&&new Date(b.endTime)>=now);
-        }
-
-        function getAllFutureBookings(deviceId){
-            const now=new Date();
-            return bookings.filter(b=>b.deviceId===deviceId&&new Date(b.startTime)>now).sort((a,b)=>new Date(a.startTime)-new Date(b.startTime));
-        }
-
-        function checkOverlap(deviceId,start,end,excludeId=null){
-            const s=new Date(start).getTime(), e=new Date(end).getTime();
-            if(s>=e) return true;
-            return bookings.some(b=>b.deviceId===deviceId&&(!excludeId||b.id!==excludeId)&&new Date(b.startTime).getTime()<e&&new Date(b.endTime).getTime()>s);
-        }
-
-        function formatDateTime(iso){
-            try{ return new Date(iso).toLocaleString('zh-CN',{hour12:false}); }catch{ return iso; }
-        }
-
-        function toDatetimeLocal(iso){
-            if(!iso) return '';
-            const d=new Date(iso);
-            return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}T${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
-        }
-
-        function generateMiniCalendar(deviceId, year, month){
-            const firstDay=new Date(year, month, 1);
-            const startWeekday=firstDay.getDay();
-            const daysInMonth=new Date(year, month+1, 0).getDate();
-            const prevMonthDays=new Date(year, month, 0).getDate();
-            const now=new Date();
-            const deviceBookings=bookings.filter(b=>b.deviceId===deviceId).sort((a,b)=>new Date(a.startTime)-new Date(b.startTime));
-            const dateToBooking=new Map();
-            for(let d=1;d<=daysInMonth;d++){
-                const date=new Date(year, month, d); date.setHours(0,0,0,0);
-                let covering=null;
-                for(let b of deviceBookings){
-                    const start=new Date(b.startTime); start.setHours(0,0,0,0);
-                    const end=new Date(b.endTime); end.setHours(0,0,0,0);
-                    if(date>=start&&date<=end){
-                        if(!covering) covering=b;
-                        else{
-                            const curActive=(new Date(covering.startTime)<=now&&new Date(covering.endTime)>=now);
-                            const newActive=(new Date(b.startTime)<=now&&new Date(b.endTime)>=now);
-                            if(newActive&&!curActive) covering=b;
-                            else if(newActive===curActive&&new Date(b.startTime)<new Date(covering.startTime)) covering=b;
-                        }
-                    }
-                }
-                if(covering) dateToBooking.set(d, covering);
-            }
-            let cells=[];
-            for(let i=startWeekday-1;i>=0;i--) cells.push({day:prevMonthDays-i,curr:false});
-            for(let d=1;d<=daysInMonth;d++) cells.push({day:d,curr:true});
-            let n=1; while(cells.length<42) cells.push({day:n++,curr:false});
-            cells.forEach(cell=>{const booking=dateToBooking.get(cell.day); if(booking&&cell.curr) cell.color=getBookingColor(booking.id); else cell.color=null;});
-            cells.forEach((cell,idx)=>{
-                if(!cell.color) return;
-                const left=idx>0?cells[idx-1]:null, right=idx<cells.length-1?cells[idx+1]:null;
-                const leftSame=left&&left.color===cell.color, rightSame=right&&right.color===cell.color;
-                if(leftSame&&rightSame) cell.cont='continuous-both';
-                else if(leftSame) cell.cont='continuous-right';
-                else if(rightSame) cell.cont='continuous-left';
-                else cell.cont='';
-            });
-            let daysHtml='';
-            cells.forEach(cell=>{
-                let style=cell.color?` style="background-color:${cell.color}; color:#1D2129;"`:'';
-                let cls=`mini-day ${!cell.curr?'other-month':''} ${cell.cont||''}`;
-                daysHtml+=`<div class="${cls}"${style}>${cell.day}</div>`;
-            });
-            const wd=['日','一','二','三','四','五','六'].map(d=>`<div>${d}</div>`).join('');
-            return `<div class="mini-calendar">
-                <div class="mini-calendar-header">
-                    <span class="current-month">${year}年${month+1}月</span>
-                    <div class="month-nav">
-                        <button class="prev-month" data-device="${deviceId}" data-year="${year}" data-month="${month}">◀</button>
-                        <button class="next-month" data-device="${deviceId}" data-year="${year}" data-month="${month}">▶</button>
-                    </div>
-                </div>
-                <div class="mini-weekdays">${wd}</div>
-                <div class="mini-days">${daysHtml}</div>
-            </div>`;
-        }
-
-        function renderDevices(){
-            syncDeviceStatusFromBookings();
-            const grid=document.getElementById('deviceGrid');
-            if(!devices.length){grid.innerHTML='<div style="grid-column:1/-1;padding:40px;text-align:center;">暂无设备</div>';return;}
-            let html='';
-            devices.forEach(dev=>{
-                let state=deviceCalendarState.get(dev.id);
-                if(!state){ const now=new Date(); state={year:now.getFullYear(), month:now.getMonth()}; deviceCalendarState.set(dev.id,state); }
-                const current=getCurrentBooking(dev.id);
-                const future=getAllFutureBookings(dev.id);
-                let bookingsHtml='';
-                if(current){
-                    const bg=getBookingColor(current.id);
-                    bookingsHtml+=`<div class="booking-info-block current" style="background:${bg};">
-                        <div class="title">▶️ 🔵 运行中 · 测试人: ${escapeHtml(current.tester)}</div>
-                        <div class="detail">🌡️ 测试条件：${escapeHtml(current.testCondition||'未填写')}</div>
-                        <div class="detail">📅 时间：${formatDateTime(current.startTime)} → ${formatDateTime(current.endTime)}</div>
-                        <div class="detail">💬 备注：${escapeHtml(current.note||'无')}</div>
-                    </div>`;
-                }
-                future.forEach((b,idx)=>{
-                    const bg=getBookingColor(b.id);
-                    bookingsHtml+=`<div class="booking-info-block" style="background:${bg};">
-                        <div class="title">⏳ 预约 #${idx+1} · 测试人: ${escapeHtml(b.tester)}</div>
-                        <div class="detail">🧪 测试条件：${escapeHtml(b.testCondition||'未填写')}</div>
-                        <div class="detail">📆 时间：${formatDateTime(b.startTime)} → ${formatDateTime(b.endTime)}</div>
-                        <div class="detail">✏️ 备注：${escapeHtml(b.note||'无')}</div>
-                    </div>`;
-                });
-                if(future.length===0 && !current) bookingsHtml='<div style="text-align:center;padding:12px;">暂无预约</div>';
-                html+=`<div class="device-card" data-device-id="${dev.id}">
-                    <div class="card-header">
-                        <span class="device-name">${escapeHtml(dev.name)}</span>
-                        <span class="status-badge ${statusClassMap[dev.status]}">${statusIconMap[dev.status]} ${statusMap[dev.status]}</span>
-                    </div>
-                    <div class="device-meta">
-                        <div>🏷️ ${escapeHtml(dev.id)}</div>
-                        <div>📦 ${escapeHtml(dev.model)}</div>
-                        <div>📍 ${escapeHtml(dev.location)}</div>
-                    </div>
-                    <div class="calendar-container" data-device="${dev.id}">${generateMiniCalendar(dev.id, state.year, state.month)}</div>
-                    ${bookingsHtml}
-                    <div class="card-actions">
-                        <button class="btn-icon" data-action="viewDevice" data-id="${dev.id}">👁️ 查看</button>
-                        <button class="btn-icon" data-action="editDevice" data-id="${dev.id}">✏️ 编辑</button>
-                        <button class="btn-icon" data-action="deleteDevice" data-id="${dev.id}">🗑️ 删除</button>
-                    </div>
-                </div>`;
-            });
-            grid.innerHTML=html;
-            grid.addEventListener('click',(e)=>{
-                const prevBtn=e.target.closest('.prev-month');
-                const nextBtn=e.target.closest('.next-month');
-                if(prevBtn){
-                    e.preventDefault();
-                    const deviceId=prevBtn.dataset.device;
-                    let year=parseInt(prevBtn.dataset.year);
-                    let month=parseInt(prevBtn.dataset.month);
-                    let newMonth=month-1, newYear=year;
-                    if(newMonth<0){ newMonth=11; newYear=year-1; }
-                    deviceCalendarState.set(deviceId,{year:newYear,month:newMonth});
-                    updateDeviceCalendar(deviceId);
-                }else if(nextBtn){
-                    e.preventDefault();
-                    const deviceId=nextBtn.dataset.device;
-                    let year=parseInt(nextBtn.dataset.year);
-                    let month=parseInt(nextBtn.dataset.month);
-                    let newMonth=month+1, newYear=year;
-                    if(newMonth>11){ newMonth=0; newYear=year+1; }
-                    deviceCalendarState.set(deviceId,{year:newYear,month:newMonth});
-                    updateDeviceCalendar(deviceId);
-                }
-            });
-        }
-
-        function updateDeviceCalendar(deviceId){
-            const state=deviceCalendarState.get(deviceId);
-            if(!state) return;
-            const container=document.querySelector(`.calendar-container[data-device="${deviceId}"]`);
-            if(container) container.innerHTML=generateMiniCalendar(deviceId, state.year, state.month);
-        }
-
-        function renderBookings(){
-            const tbody=document.getElementById('bookingTbody');
-            if(!bookings.length){tbody.innerHTML='<tr><td colspan="8" style="text-align:center">暂无预约</td></tr>';return;}
-            let rows='';
-            bookings.forEach((b,idx)=>{
-                const dev=devices.find(d=>d.id===b.deviceId);
-                rows+=`<tr>
-                    <td>${escapeHtml(dev?.name||b.deviceId)}</td>
-                    <td>${escapeHtml(b.tester)}</td>
-                    <td>${escapeHtml(b.customerName)}</td>
-                    <td>${escapeHtml(b.projectName)}</td>
-                    <td>${escapeHtml(b.testCondition||'—')}</td>
-                    <td>${formatDateTime(b.startTime)}</td>
-                    <td>${formatDateTime(b.endTime)}</td>
-                    <td><div class="booking-actions">
-                        <button class="btn-icon" data-action="viewBooking" data-id="${b.id}">👁️</button>
-                        <button class="btn-icon" data-action="editBooking" data-id="${b.id}">✏️</button>
-                        <button class="btn-icon" data-action="deleteBooking" data-id="${b.id}">🗑️</button>
-                    </div></td>
-                </tr>`;
-            });
-            tbody.innerHTML=rows;
-        }
-
-        function refreshUI(){ renderDevices(); renderBookings(); }
-        function escapeHtml(s){ return String(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]); }
-
-        let currentMode=null, currentEditId=null;
-        const modalOverlay=document.getElementById('modalOverlay'), modalTitle=document.getElementById('modalTitle'), modalSaveBtn=document.getElementById('modalSaveBtn');
-        const deviceFormFields=document.getElementById('deviceFormFields'), bookingFormFields=document.getElementById('bookingFormFields');
-        const deviceName=document.getElementById('deviceName'), deviceModel=document.getElementById('deviceModel'), deviceLocation=document.getElementById('deviceLocation'), deviceStatus=document.getElementById('deviceStatus');
-        const bookingDeviceSelect=document.getElementById('bookingDeviceSelect'), testerName=document.getElementById('testerName'), customerName=document.getElementById('customerName'), projectName=document.getElementById('projectName'), testCondition=document.getElementById('testCondition'), startTime=document.getElementById('startTime'), endTime=document.getElementById('endTime'), bookingNote=document.getElementById('bookingNote');
-        const deviceFormError=document.getElementById('deviceFormError'), bookingFormError=document.getElementById('bookingFormError');
-
-        function openModal(mode,id=null){
-            currentMode=mode; currentEditId=id;
-            deviceFormError.textContent=''; bookingFormError.textContent='';
-            deviceFormFields.style.display='none'; bookingFormFields.style.display='none';
-            const isView=mode.includes('view');
-            if(mode.includes('Device')){
-                deviceFormFields.style.display='block';
-                modalTitle.textContent=mode==='addDevice'?'➕ 添加设备':(mode==='viewDevice'?'🔍 设备详情':'✏️ 编辑设备');
-            }else{
-                bookingFormFields.style.display='block';
-                modalTitle.textContent=mode==='addBooking'?'📅 新建预约':(mode==='viewBooking'?'📋 预约详情':'✏️ 编辑预约');
-                populateDeviceSelect();
-            }
-            document.querySelectorAll('#modalForm input, #modalForm select, #modalForm textarea').forEach(el=>el.disabled=isView);
-            modalSaveBtn.style.display=isView?'none':'inline-flex';
-            if((mode==='editDevice'||mode==='viewDevice')&&id){
-                const d=devices.find(x=>x.id===id);
-                if(d){deviceName.value=d.name; deviceModel.value=d.model; deviceLocation.value=d.location; deviceStatus.value=d.status;}
-            }else if(mode==='addDevice'){deviceName.value=''; deviceModel.value=''; deviceLocation.value=''; deviceStatus.value='idle';}
-            if((mode==='editBooking'||mode==='viewBooking')&&id){
-                const b=bookings.find(x=>x.id===id);
-                if(b){
-                    testerName.value=b.tester; customerName.value=b.customerName; projectName.value=b.projectName;
-                    testCondition.value=b.testCondition||''; bookingNote.value=b.note||'';
-                    startTime.value=toDatetimeLocal(b.startTime); endTime.value=toDatetimeLocal(b.endTime);
-                    populateDeviceSelect(); bookingDeviceSelect.value=b.deviceId;
-                }
-            }else if(mode==='addBooking'){
-                testerName.value=''; customerName.value=''; projectName.value=''; testCondition.value=''; bookingNote.value='';
-                startTime.value=''; endTime.value=''; populateDeviceSelect();
-            }
-            modalOverlay.classList.add('active');
-        }
-
-        function populateDeviceSelect(){
-            bookingDeviceSelect.innerHTML='';
-            devices.forEach(d=>{const o=document.createElement('option'); o.value=d.id; o.textContent=`${d.name} (${d.model})`; bookingDeviceSelect.appendChild(o);});
-        }
-
-        function closeModal(){ modalOverlay.classList.remove('active'); }
-
-        function validateDevice(){
-            if(!deviceName.value.trim()){ deviceFormError.textContent='请填写设备名称'; return false; }
-            if(!deviceModel.value.trim()){ deviceFormError.textContent='请填写型号'; return false; }
-            if(!deviceLocation.value.trim()){ deviceFormError.textContent='请填写位置'; return false; }
-            return true;
-        }
-
-        function validateBooking(){
-            if(!bookingDeviceSelect.value){ bookingFormError.textContent='请选择设备'; return false; }
-            if(!testerName.value.trim()){ bookingFormError.textContent='测试人不能为空'; return false; }
-            if(!customerName.value.trim()){ bookingFormError.textContent='客户名称不能为空'; return false; }
-            if(!projectName.value.trim()){ bookingFormError.textContent='项目名称不能为空'; return false; }
-            if(!startTime.value||!endTime.value){ bookingFormError.textContent='请填写起止时间'; return false; }
-            if(new Date(startTime.value)>=new Date(endTime.value)){ bookingFormError.textContent='结束时间必须晚于开始时间'; return false; }
-            const deviceId=bookingDeviceSelect.value;
-            const startISO=new Date(startTime.value).toISOString(), endISO=new Date(endTime.value).toISOString();
-            if(checkOverlap(deviceId,startISO,endISO,currentMode==='editBooking'?currentEditId:null)){
-                bookingFormError.textContent='该设备在此时间段已被预约，请调整时间！';
-                return false;
-            }
-            return true;
-        }
-
-        function handleSave(){
-            if(!currentMode) return;
-            if(currentMode.includes('Device')){
-                if(!validateDevice()) return;
-                const data={name:deviceName.value.trim(), model:deviceModel.value.trim(), location:deviceLocation.value.trim(), status:deviceStatus.value};
-                if(currentMode==='addDevice') devices.push({id:`E${nextDeviceId++}`,...data});
-                else{const idx=devices.findIndex(d=>d.id===currentEditId); if(idx!==-1) devices[idx]={...devices[idx],...data};}
-            }else{
-                if(!validateBooking()) return;
-                const startISO=new Date(startTime.value).toISOString(), endISO=new Date(endTime.value).toISOString();
-                const data={deviceId:bookingDeviceSelect.value, tester:testerName.value.trim(), customerName:customerName.value.trim(), projectName:projectName.value.trim(), testCondition:testCondition.value.trim(), startTime:startISO, endTime:endISO, note:bookingNote.value.trim()};
-                if(currentMode==='addBooking') bookings.push({id:`B${nextBookingId++}`,...data});
-                else{const idx=bookings.findIndex(b=>b.id===currentEditId); if(idx!==-1) bookings[idx]={...bookings[idx],...data};}
-            }
-            saveToLocalStorage(true);
-            refreshUI();
-            closeModal();
-        }
-
-        function deleteDevice(id){
-            if(confirm('删除设备？关联预约将保留')){
-                devices=devices.filter(d=>d.id!==id);
-                saveToLocalStorage(true);
-                refreshUI();
-            }
-        }
-        function deleteBooking(id){
-            if(confirm('删除预约？')){
-                bookings=bookings.filter(b=>b.id!==id);
-                saveToLocalStorage(true);
-                refreshUI();
-            }
-        }
-
-        document.getElementById('exportDataBtn').addEventListener('click', exportData);
-        document.getElementById('importFileInput').addEventListener('change', (e) => {
-            if(e.target.files.length) importData(e.target.files[0]);
+            reader.readAsText(e.target.files[0]);
             e.target.value = '';
+        }
+    });
+    // 手动保存
+    document.getElementById('manualSaveBtn').addEventListener('click', async ()=>{
+        await saveData({ devices, bookings, nextDeviceId, nextBookingId });
+    });
+
+    // 事件委托
+    document.addEventListener('click', e => {
+        const btn = e.target.closest('[data-action]');
+        if(!btn) return;
+        const action = btn.dataset.action, id = btn.dataset.id;
+        if(action==='viewDevice') openModal('viewDevice',id);
+        else if(action==='editDevice') openModal('editDevice',id);
+        else if(action==='deleteDevice') deleteDevice(id);
+        else if(action==='viewBooking') openModal('viewBooking',id);
+        else if(action==='editBooking') openModal('editBooking',id);
+        else if(action==='deleteBooking') deleteBooking(id);
+    });
+
+    document.getElementById('addDeviceBtn').addEventListener('click', ()=>openModal('addDevice'));
+    document.getElementById('newBookingBtn').addEventListener('click', ()=>openModal('addBooking'));
+    modalSaveBtn.addEventListener('click', handleSave);
+    document.getElementById('modalCancelBtn').addEventListener('click', closeModal);
+    document.getElementById('closeModalBtn').addEventListener('click', closeModal);
+    modalOverlay.addEventListener('click', (e) => { if(e.target===modalOverlay) closeModal(); });
+    document.addEventListener('keydown', (e) => { if(e.key==='Escape' && modalOverlay.classList.contains('active')) closeModal(); });
+
+    // 启动流程
+    async function initApp() {
+        const stored = await loadData();
+        if (stored && stored.devices && stored.bookings) {
+            devices = stored.devices;
+            bookings = stored.bookings;
+            nextDeviceId = stored.nextDeviceId || 1001;
+            nextBookingId = stored.nextBookingId || 5001;
+        } else {
+            const def = getDefaultData();
+            devices = def.devices;
+            bookings = def.bookings;
+            nextDeviceId = def.nextDeviceId;
+            nextBookingId = def.nextBookingId;
+            await saveData({ devices, bookings, nextDeviceId, nextBookingId }, false);
+        }
+        // 初始化日历状态
+        const now = new Date();
+        devices.forEach(dev => {
+            if(!deviceCalendarState.has(dev.id)){
+                deviceCalendarState.set(dev.id, { year: now.getFullYear(), month: now.getMonth() });
+            }
         });
-        document.getElementById('manualSaveBtn').addEventListener('click', ()=> saveToLocalStorage(true));
-
-        document.addEventListener('click',e=>{
-            const btn=e.target.closest('[data-action]');
-            if(!btn) return;
-            const action=btn.dataset.action, id=btn.dataset.id;
-            if(action==='viewDevice') openModal('viewDevice',id);
-            else if(action==='editDevice') openModal('editDevice',id);
-            else if(action==='deleteDevice') deleteDevice(id);
-            else if(action==='viewBooking') openModal('viewBooking',id);
-            else if(action==='editBooking') openModal('editBooking',id);
-            else if(action==='deleteBooking') deleteBooking(id);
-        });
-
-        document.getElementById('addDeviceBtn').addEventListener('click',()=>openModal('addDevice'));
-        document.getElementById('newBookingBtn').addEventListener('click',()=>openModal('addBooking'));
-        modalSaveBtn.addEventListener('click',handleSave);
-        document.getElementById('modalCancelBtn').addEventListener('click',closeModal);
-        document.getElementById('closeModalBtn').addEventListener('click',closeModal);
-        document.addEventListener('keydown',e=>{if(e.key==='Escape'&&modalOverlay.classList.contains('active')) closeModal();});
-
-        initData();
         refreshUI();
-    })();
+        // 隐藏加载画面
+        document.getElementById('loadingScreen').style.opacity = '0';
+        setTimeout(() => {
+            const ls = document.getElementById('loadingScreen');
+            if(ls) ls.style.display = 'none';
+        }, 300);
+    }
+
+    initApp();
 </script>
 </body>
 </html>
