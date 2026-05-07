@@ -133,7 +133,6 @@
                     <div class="form-group" style="flex:1"><label>结束时间 <span class="required-star">*</span></label><input type="datetime-local" class="form-control" id="endTime"></div>
                 </div>
                 <div class="form-group"><label>备注</label><textarea class="form-control" id="bookingNote" rows="3" placeholder="其他说明"></textarea></div>
-                <!-- 设备占用提示日历 -->
                 <div id="bookingHintContainer" class="booking-hint-calendar" style="display:none;">
                     <div style="font-weight:600; margin-bottom:8px;">📅 设备占用预览（当前月份）</div>
                     <div id="bookingHintCalendar"></div>
@@ -151,64 +150,49 @@
 <script>
 (function() {
     "use strict";
-    console.log('应用已启动');
 
-    const isTauri = typeof window.__TAURI__ !== 'undefined';
-    const tauriFS = isTauri ? window.__TAURI__.fs : null;
-    const tauriPath = isTauri ? window.__TAURI__.path : null;
+    // 检测 Tauri 环境
+    const isTauri = !!(window.__TAURI__ && window.__TAURI__.invoke);
+    let tauriInvoke = null;
+    if (isTauri) {
+        tauriInvoke = window.__TAURI__.invoke;
+    }
 
-    const DATA_FOLDER = 'data';
-    const DATA_FILE = 'chamber_data.json';
     const STORAGE_KEY = 'climate_chamber_offline_pack';
 
-    async function getStoragePath() {
-        if (!isTauri) return null;
-        try { const appDir = await tauriPath.appDir(); return `${appDir}${DATA_FOLDER}`; } catch (e) { return null; }
-    }
-
-    async function ensureDir(dir) { if (!isTauri) return; try { await tauriFS.createDir(dir, { recursive: true }); } catch(e) {} }
-
-    async function loadFromFile() {
-        if (!isTauri) return null;
-        try {
-            const baseDir = await getStoragePath();
-            if (!baseDir) return null;
-            const content = await tauriFS.readTextFile(`${baseDir}/${DATA_FILE}`);
-            return JSON.parse(content);
-        } catch(e) { return null; }
-    }
-
-    async function saveToFile(data) {
-        if (!isTauri) return false;
-        try {
-            const baseDir = await getStoragePath();
-            if (!baseDir) return false;
-            await ensureDir(baseDir);
-            await tauriFS.writeTextFile(`${baseDir}/${DATA_FILE}`, JSON.stringify(data, null, 2));
-            return true;
-        } catch(e) {
-            try {
-                const appDataDir = await tauriPath.appDataDir();
-                const backupDir = `${appDataDir}${DATA_FOLDER}`;
-                await ensureDir(backupDir);
-                await tauriFS.writeTextFile(`${backupDir}/${DATA_FILE}`, JSON.stringify(data, null, 2));
-            } catch(e2) {}
-            return false;
-        }
-    }
-
+    // ========== 核心存储函数 ==========
     async function loadData() {
-        const fileData = await loadFromFile();
-        if (fileData) return fileData;
+        if (isTauri && tauriInvoke) {
+            try {
+                const data = await tauriInvoke('load_app_data');
+                if (data && (data.devices || data.bookings)) {
+                    return data;
+                }
+            } catch (err) {
+                console.warn('调用 load_app_data 失败:', err);
+            }
+        }
         const saved = localStorage.getItem(STORAGE_KEY);
-        if (saved) { try { return JSON.parse(saved); } catch(e) {} }
+        if (saved) {
+            try {
+                return JSON.parse(saved);
+            } catch(e) {}
+        }
         return null;
     }
 
-    async function saveData(data, showMsg = true) {
-        if (isTauri) await saveToFile(data);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-        if (showMsg && !isTauri) showToast('✅ 数据已保存');
+    async function saveData(allData, showMsg = true) {
+        if (isTauri && tauriInvoke) {
+            try {
+                await tauriInvoke('save_app_data', { data: allData });
+                if (showMsg) showToast('✅ 数据已保存');
+                return;
+            } catch (err) {
+                console.warn('调用 save_app_data 失败:', err);
+            }
+        }
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(allData));
+        if (showMsg) showToast('✅ 数据已保存（本地）');
     }
 
     function showToast(msg) {
@@ -220,6 +204,7 @@
         window.toastTimer = setTimeout(() => { toast.style.opacity = '0'; }, 3000);
     }
 
+    // ========== 以下为业务逻辑（完全保留原有功能）==========
     const COLOR_PALETTE = ['hsl(200,25%,85%)','hsl(160,25%,85%)','hsl(220,25%,85%)','hsl(280,25%,85%)','hsl(0,0%,90%)','hsl(30,25%,85%)','hsl(120,25%,85%)','hsl(320,25%,85%)'];
     function getBookingColor(id) {
         let hash = 0;
@@ -441,7 +426,7 @@
 
     function renderBookings() {
         const tbody = document.getElementById('bookingTbody');
-        if (!bookings.length) { tbody.innerHTML = '<tr><td colspan="8" style="text-align:center">暂无预约</td></tr>'; return; }
+        if (!bookings.length) { tbody.innerHTML = '<tr><td colspan="8" style="text-align:center">暂无预约</td><tr>'; return; }
         let rows = '';
         bookings.forEach(b => {
             const dev = devices.find(d => d.id === b.deviceId);
@@ -458,7 +443,7 @@
                     <button class="btn-icon" data-action="editBooking" data-id="${b.id}">✏️</button>
                     <button class="btn-icon" data-action="deleteBooking" data-id="${b.id}">🗑️</button>
                 </div></td>
-            </tr>`;
+            </table>`;
         });
         tbody.innerHTML = rows;
     }
