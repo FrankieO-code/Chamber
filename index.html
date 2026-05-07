@@ -426,7 +426,7 @@
 
     function renderBookings() {
         const tbody = document.getElementById('bookingTbody');
-        if (!bookings.length) { tbody.innerHTML = '<tr><td colspan="8" style="text-align:center">暂无预约</td><tr>'; return; }
+        if (!bookings.length) { tbody.innerHTML = '<tr><td colspan="8" style="text-align:center">暂无预约</td></table>'; return; }
         let rows = '';
         bookings.forEach(b => {
             const dev = devices.find(d => d.id === b.deviceId);
@@ -443,7 +443,7 @@
                     <button class="btn-icon" data-action="editBooking" data-id="${b.id}">✏️</button>
                     <button class="btn-icon" data-action="deleteBooking" data-id="${b.id}">🗑️</button>
                 </div></td>
-            </table>`;
+            </tr>`;
         });
         tbody.innerHTML = rows;
     }
